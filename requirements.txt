@@ -1,0 +1,29 @@
+# Core
+numpy
+pandas
+scikit-learn
+scipy
+
+# Modeling
+torch
+surprise
+
+# Backend
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+pyyaml
+
+# Dashboard
+streamlit
+requests
+
+# Notebooks / EDA
+matplotlib
+seaborn
+jupyter
+
+# Testing
+pytest
+httpx

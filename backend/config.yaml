@@ -1,0 +1,23 @@
+# Shared config — single source of truth for backend + dashboard
+model:
+  fm_model_path: "models/fm_model.pt"
+  fm_config_path: "models/fm_config.json"
+  item_embeddings_path: "models/item_embeddings.npy"
+  item_metadata_path: "data/processed/items.csv"
+  device: "cpu"   # set to "cuda" if available at inference time
+
+recommendation:
+  default_n: 10
+  max_n: 50
+
+similarity:
+  method: "embedding"   # "embedding" or "content"
+  top_k_default: 10
+
+data:
+  ratings_path: "data/processed/ratings.csv"
+  users_path: "data/processed/users.csv"
+
+api:
+  title: "RS Course Project API"
+  version: "0.1.0"
