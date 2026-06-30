@@ -247,3 +247,118 @@ def mean_metric(
 
     scores = [metric_fn(act, pred, **kwargs) for act, pred in zip(actuals, predictions)]
     return float(np.mean(scores))
+
+# =====================================================================
+# 4. Catalog/System-Level Metrics (Coverage, Diversity, Novelty, Serendipity)
+# =====================================================================
+
+def item_coverage(predictions: List[List[Any]], catalog: Union[List[Any], Set[Any]]) -> float:
+    """
+    Calculate catalog (item) coverage: the fraction of the total item catalog
+    that appears across all users' recommendation lists.
+
+    Args:
+        predictions: A list where each element is the ordered list of recommended
+                      items for a user.
+        catalog: The full set of items available in the system.
+    """
+    if not predictions or not catalog:
+        return 0.0
+
+    recommended_items = set()
+    for pred in predictions:
+        recommended_items.update(pred)
+
+    return len(recommended_items) / len(set(catalog))
+
+def diversity_at_k(predicted: List[Any], item_features: Dict[Any, np.ndarray], k: int) -> float:
+    """
+    Calculate intra-list diversity for a single user: average pairwise dissimilarity
+    (1 - cosine similarity) between items in the top-k recommended list.
+
+    Args:
+        predicted: Ordered list of recommended items.
+        item_features: Mapping of item -> feature vector (e.g. genre one-hot,
+                        or learned embedding) used to measure similarity.
+        k: The number of top recommendations to consider.
+    """
+    predicted_k = [item for item in predicted[:k] if item in item_features]
+    if len(predicted_k) < 2:
+        return 0.0
+
+    vectors = np.array([item_features[item] for item in predicted_k])
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    norms[norms == 0] = 1e-10  # avoid division by zero
+    normalized = vectors / norms
+
+    sim_matrix = normalized @ normalized.T
+    n = len(predicted_k)
+    # Sum upper triangle (excluding diagonal) of similarity matrix, average, then invert
+    upper_tri_sum = np.sum(np.triu(sim_matrix, k=1))
+    num_pairs = n * (n - 1) / 2
+    avg_similarity = upper_tri_sum / num_pairs
+
+    return 1.0 - float(avg_similarity)
+
+def novelty_at_k(predicted: List[Any], item_popularity: Dict[Any, int], total_interactions: int, k: int) -> float:
+    """
+    Calculate novelty for a single user: average self-information of the
+    top-k recommended items, based on how rare they are in the training data.
+    Higher = more novel (less popular/obvious) recommendations.
+
+    Args:
+        predicted: Ordered list of recommended items.
+        item_popularity: Mapping of item -> number of interactions in training data.
+        total_interactions: Total number of interactions across the training data,
+                             used to normalize popularity into a probability.
+        k: The number of top recommendations to consider.
+    """
+    predicted_k = predicted[:k]
+    if not predicted_k or total_interactions <= 0:
+        return 0.0
+
+    self_information_scores = []
+    for item in predicted_k:
+        pop = item_popularity.get(item, 0)
+        if pop <= 0:
+            continue  # item unseen in training; undefined probability, skip rather than divide by zero
+        prob = pop / total_interactions
+        self_information_scores.append(-np.log2(prob))
+
+    if not self_information_scores:
+        return 0.0
+
+    return float(np.mean(self_information_scores))
+
+def serendipity_at_k(
+    actual: Union[List[Any], Set[Any]],
+    predicted: List[Any],
+    expected_items: Union[List[Any], Set[Any]],
+    k: int
+) -> float:
+    """
+    Calculate serendipity for a single user: fraction of top-k recommended items
+    that are both relevant (in actual) AND unexpected (not in expected_items,
+    e.g. not what a popularity or content-based baseline would have suggested).
+
+    Args:
+        actual: Collection of ground truth items the user interacted with/liked.
+        predicted: Ordered list of recommended items.
+        expected_items: Items considered "obvious"/unsurprising for this user,
+                         e.g. top-N from a popularity baseline, or items similar
+                         to the user's historical interactions.
+        k: The number of top recommendations to consider.
+    """
+    if not actual or not predicted or k <= 0:
+        return 0.0
+
+    predicted_k = predicted[:k]
+    actual_set = set(actual)
+    expected_set = set(expected_items)
+
+    unexpected_and_relevant = [
+        item for item in predicted_k
+        if item in actual_set and item not in expected_set
+    ]
+
+    return len(unexpected_and_relevant) / k
