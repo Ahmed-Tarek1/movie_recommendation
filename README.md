@@ -17,12 +17,17 @@ Download MovieLens (small) into `data/raw/` from
 
 ## Running
 
-**1. Train the model** (produces `models/fm_model.pt`, `models/fm_config.json`,
+**1. Train the model** (produces `models/{fm,deepfm}_model.pt`, matching `_config.json`,
 `models/item_embeddings.npy`):
 
 ```bash
-jupyter notebook notebooks/03_train_fm_model.ipynb
+jupyter notebook notebooks/03_train_fm_model.ipynb       # baseline FM
+jupyter notebook notebooks/04_train_deepfm_model.ipynb   # DeepFM (FM + deep MLP)
 ```
+
+`backend/config.yaml` points at whichever model's `.pt`/`.json` files you want served —
+swap `fm_model_path`/`fm_config_path` to the DeepFM artifacts once trained. The config's
+`model_type` field ("fm" or "deepfm") tells `backend/models/fm_inference.py` which class to load.
 
 **2. Start the backend:**
 
@@ -65,5 +70,8 @@ tests/           pytest tests for backend endpoints
 - The FM model class lives in `src/fm_model.py` and is imported by both the
   training notebook and `backend/models/fm_inference.py` — don't redefine it
   in the notebook, or saved weights won't load cleanly.
+- `DeepFM` (same file) extends `FactorizationMachine` — it wraps an FM instance
+  internally and adds an MLP tower on the same embeddings, so both models share
+  one inference loader. Set `model_type` in `fm_config.json` to switch between them.
 - `backend/config.yaml` is the single source of truth for model paths and
   pagination defaults.

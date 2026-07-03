@@ -15,8 +15,8 @@ similarity:
   top_k_default: 10
 
 data:
-  ratings_path: "data/processed/ratings.csv"
-  users_path: "data/processed/users.csv"
+  ratings_path: "data/raw/ratings.csv"
+  movies_path:  "data/raw/movies.csv"
 
 api:
   title: "RS Course Project API"

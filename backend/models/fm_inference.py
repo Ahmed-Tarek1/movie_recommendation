@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))  # repo root, for src/ import
-from src.fm_model import FactorizationMachine  # noqa: E402
+from src.fm_model import DeepFM, FactorizationMachine  # noqa: E402
 
 
 class FMRecommender:
@@ -17,10 +17,22 @@ class FMRecommender:
             self.config = json.load(f)
 
         self.device = device
-        self.model = FactorizationMachine(
-            field_dims=self.config["field_dims"],
-            embed_dim=self.config["embed_dim"],
-        )
+
+        # config["model_type"]: "fm" or "deepfm" — set this when saving fm_config.json
+        model_type = self.config.get("model_type", "fm")
+        if model_type == "deepfm":
+            self.model = DeepFM(
+                field_dims=self.config["field_dims"],
+                embed_dim=self.config["embed_dim"],
+                mlp_dims=self.config.get("mlp_dims", [128, 64, 32]),
+                dropout=self.config.get("dropout", 0.2),
+            )
+        else:
+            self.model = FactorizationMachine(
+                field_dims=self.config["field_dims"],
+                embed_dim=self.config["embed_dim"],
+            )
+
         self.model.load_state_dict(torch.load(model_path, map_location=device))
         self.model.to(device)
         self.model.eval()

@@ -59,3 +59,62 @@ class FactorizationMachine(nn.Module):
         base_offset = int(self.offsets[item_field_index].item())
         idxs = torch.tensor([base_offset + i for i in item_offset_within_field])
         return self.embedding(idxs).detach()
+
+
+class DeepFM(nn.Module):
+    """
+    FM component (linear + 2nd-order interactions) + a deep MLP component,
+    sharing the same embedding table. Extends FactorizationMachine rather than
+    duplicating it, so the FM half stays identical and battle-tested.
+
+    mlp_dims: hidden layer sizes, e.g. [128, 64, 32]
+    dropout: applied after each hidden layer
+    """
+
+    def __init__(
+        self,
+        field_dims: list[int],
+        embed_dim: int = 16,
+        mlp_dims: list[int] | None = None,
+        dropout: float = 0.2,
+    ):
+        super().__init__()
+        if mlp_dims is None:
+            mlp_dims = [128, 64, 32]
+
+        self.fm = FactorizationMachine(field_dims, embed_dim)
+
+        num_fields = len(field_dims)
+        input_dim = num_fields * embed_dim
+
+        layers = []
+        prev_dim = input_dim
+        for dim in mlp_dims:
+            layers.append(nn.Linear(prev_dim, dim))
+            layers.append(nn.BatchNorm1d(dim))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(dropout))
+            prev_dim = dim
+        layers.append(nn.Linear(prev_dim, 1))
+        self.mlp = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_offset = x + self.fm.offsets.to(x.device)
+
+        # FM component (linear + pairwise interaction terms)
+        linear_term = self.fm.linear(x_offset).sum(dim=1).squeeze(-1) + self.fm.bias
+        emb = self.fm.embedding(x_offset)  # (batch, num_fields, embed_dim)
+        sum_sq = emb.sum(dim=1).pow(2)
+        sq_sum = emb.pow(2).sum(dim=1)
+        fm_interaction = 0.5 * (sum_sq - sq_sum).sum(dim=1)
+        fm_out = linear_term + fm_interaction
+
+        # Deep component — same embeddings, flattened into the MLP
+        deep_input = emb.view(emb.size(0), -1)
+        deep_out = self.mlp(deep_input).squeeze(-1)
+
+        return fm_out + deep_out
+
+    def get_item_embeddings(self, item_field_index: int, item_offset_within_field: range) -> torch.Tensor:
+        """Reuses the FM half's embedding table — same vectors power both components."""
+        return self.fm.get_item_embeddings(item_field_index, item_offset_within_field)

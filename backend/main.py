@@ -1,18 +1,21 @@
 import sys
 from pathlib import Path
 
+import pandas as pd
 import yaml
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))  # repo root
 
-from backend.models import fm_inference, similarity  # noqa: E402
-from backend.models.fm_inference import FMRecommender  # noqa: E402
-from backend.models.similarity import ItemSimilarity  # noqa: E402
-from backend.routers import item, user  # noqa: E402
+from backend.models import fm_inference, similarity
+from backend.models.fm_inference import FMRecommender
+from backend.models.similarity import ItemSimilarity
+from backend.routers import item as item_router
+from backend.routers import user as user_router
 
 CONFIG_PATH = Path(__file__).parent / "config.yaml"
+REPO_ROOT   = Path(__file__).resolve().parents[1]
 
 
 def load_config() -> dict:
@@ -26,31 +29,36 @@ app = FastAPI(title=config["api"]["title"], version=config["api"]["version"])
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten for production
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 @app.on_event("startup")
-def load_models():
-    repo_root = Path(__file__).resolve().parents[1]
-
+def load_models_and_data():
+    # --- models ---
     fm_inference.recommender = FMRecommender(
-        model_path=str(repo_root / config["model"]["fm_model_path"]),
-        config_path=str(repo_root / config["model"]["fm_config_path"]),
+        model_path=str(REPO_ROOT / config["model"]["fm_model_path"]),
+        config_path=str(REPO_ROOT / config["model"]["fm_config_path"]),
         device=config["model"]["device"],
     )
-
     similarity.item_similarity = ItemSimilarity(
-        item_embeddings_path=str(repo_root / config["model"]["item_embeddings_path"]),
+        item_embeddings_path=str(REPO_ROOT / config["model"]["item_embeddings_path"]),
         item_mapping=fm_inference.recommender.item_mapping,
         method=config["similarity"]["method"],
     )
 
+    # --- data (for history / profile / dropdowns) ---
+    ratings_df = pd.read_csv(REPO_ROOT / config["data"]["ratings_path"])
+    movies_df  = pd.read_csv(REPO_ROOT / config["data"]["movies_path"])
 
-app.include_router(user.router)
-app.include_router(item.router)
+    user_router.init_data(ratings_df, movies_df)
+    item_router.init_data(movies_df)
+
+
+app.include_router(user_router.router)
+app.include_router(item_router.router)
 
 
 @app.get("/health")
