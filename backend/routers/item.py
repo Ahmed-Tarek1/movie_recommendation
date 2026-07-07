@@ -82,9 +82,13 @@ def item_profile(item_id: int):
 def list_items():
     if _movies_df is None:
         raise HTTPException(503, "Data not loaded yet")
-    return {
-        "items": [
-            {"item_id": int(row.movieId), "title": str(row.title)}
-            for row in _movies_df[['movieId', 'title']].itertuples()
-        ]
-    }
+    items = []
+    for row in _movies_df[['movieId', 'title', 'genres']].itertuples():
+        genres_raw = row.genres if pd.notna(row.genres) else ""
+        genres = [g for g in genres_raw.split('|') if g and g != '(no genres listed)']
+        items.append({
+            "item_id": int(row.movieId),
+            "title":   str(row.title),
+            "genres":  genres,
+        })
+    return {"items": items}
