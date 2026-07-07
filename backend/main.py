@@ -46,6 +46,7 @@ def load_models_and_data():
         model_path=str(REPO_ROOT / config["model"]["fm_model_path"]),
         config_path=str(REPO_ROOT / config["model"]["fm_config_path"]),
         movies_df=movies_df,
+        ratings_df=ratings_df,
         device=config["model"]["device"],
     )
     similarity.item_similarity = ItemSimilarity(
