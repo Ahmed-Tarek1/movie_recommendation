@@ -62,9 +62,6 @@ tests/           pytest tests for backend endpoints
 | `GET /similar/item/{item_id}?page=&page_size=` | Top-N similar items |
 | `GET /health` | Health check |
 
-> `history/user/{id}` and `profile/item/{id}` are referenced by the dashboard
-> but not yet implemented — see TODOs in `backend/routers/`.
-
 ## Notes
 
 - The FM model class lives in `src/fm_model.py` and is imported by both the
