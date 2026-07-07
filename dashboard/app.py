@@ -101,7 +101,7 @@ if page == "👤 User Page":
                  "Timestamp": h["timestamp"], "Movie ID": h["item_id"]}
                 for h in history["history"]
             ]
-            st.dataframe(hist_data, use_container_width=True, hide_index=True)
+            st.dataframe(hist_data, width="stretch", hide_index=True)
         else:
             st.info("No history found for this user.")
 
@@ -142,7 +142,7 @@ if page == "👤 User Page":
              "Title": r["title"], "Score": r["score"], "Movie ID": r["item_id"]}
             for i, r in enumerate(rec_items)
         ]
-        st.dataframe(rec_data, use_container_width=True, hide_index=True)
+        st.dataframe(rec_data, width="stretch", hide_index=True)
 
 
 # ── ITEM PAGE ──────────────────────────────────────────────────────────────────
@@ -194,7 +194,7 @@ elif page == "🎥 Item Page":
              "Title": s["title"], "Similarity": s["similarity"], "Movie ID": s["item_id"]}
             for i, s in enumerate(sims["items"])
         ]
-        st.dataframe(sim_data, use_container_width=True, hide_index=True)
+        st.dataframe(sim_data, width="stretch", hide_index=True)
 
 
 # ── MODEL STATS PAGE ────────────────────────────────────────────────────────────
@@ -202,10 +202,19 @@ elif page == "🎥 Item Page":
 elif page == "📊 Model Stats":
     st.header("Model Comparison — FM vs DeepFM")
     import pandas as pd
+    from pathlib import Path
 
     try:
-        comparison = pd.read_csv("../models/comparison.csv")
-        st.dataframe(comparison, use_container_width=True, hide_index=True)
+        comparison_path = (
+            Path(__file__).resolve().parent.parent
+            / "models"
+            / "comparison.csv"
+        )
+
+        comparison = pd.read_csv(comparison_path)
+
+        st.dataframe(comparison, width="stretch", hide_index=True)
         st.caption("Winner: DeepFM (Best Test RMSE: 1.0063)")
+        
     except FileNotFoundError:
         st.warning("Could not find `../models/comparison.csv` — check the file path relative to where you run `streamlit run`.")
