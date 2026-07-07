@@ -11,7 +11,7 @@ BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 st.set_page_config(page_title="CineSense", page_icon="🎬", layout="wide")
 st.title("🎬 CineSense — Movie Recommender")
 
-page = st.sidebar.radio("Navigate", ["👤 User Page", "🎥 Item Page"])
+page = st.sidebar.radio("Navigate", ["👤 User Page", "🎥 Item Page", "📊 Model Stats"])
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -38,6 +38,25 @@ def get_items() -> list[dict]:
     return data["items"] if data else []
 
 
+@st.cache_data(ttl=600)
+def get_stats():
+    users = fetch("/users")
+    items = fetch("/items")
+    return {
+        "users" : len(users["user_ids"]) if users else 0,
+        "movies": len(items["items"])    if items else 0,
+    }
+
+
+# ── SUMMARY STATS PANEL (visible on every page) ────────────────────────────────
+stats = get_stats()
+m1, m2, m3 = st.columns(3)
+m1.metric("Total Users",   stats["users"])
+m2.metric("Total Movies",  stats["movies"])
+m3.metric("Total Ratings", "100,836")
+
+st.divider()
+
 # session state for pagination
 for key in ("user_page", "item_page"):
     if key not in st.session_state:
@@ -59,6 +78,17 @@ if page == "👤 User Page":
         user_id = st.selectbox("Select User", user_ids)
     with col2:
         n = st.number_input("Items per page (N)", min_value=1, max_value=50, value=10)
+
+    genre_filter = st.multiselect(
+        "Filter recommendations by genre",
+        options=['Action', 'Adventure', 'Animation', 'Children', 'Comedy', 'Crime',
+                 'Documentary', 'Drama', 'Fantasy', 'Film-Noir', 'Horror', 'IMAX',
+                 'Musical', 'Mystery', 'Romance', 'Sci-Fi', 'Thriller', 'War', 'Western'],
+        default=[]
+    )
+
+    # movie_id -> genres lookup, built once from the cached /items list
+    genre_lookup = {it["item_id"]: it.get("genres", []) for it in get_items()}
 
     st.divider()
 
@@ -97,10 +127,20 @@ if page == "👤 User Page":
     )
     if recs:
         st.caption(f"Page {recs['page']} · {recs['total_available']} items available")
+
+        rec_items = recs["items"]
+        if genre_filter:
+            rec_items = [
+                r for r in rec_items
+                if set(genre_lookup.get(r["item_id"], [])) & set(genre_filter)
+            ]
+            if not rec_items:
+                st.info("No recommendations on this page match the selected genres. Try another page.")
+
         rec_data = [
             {"Rank": i + 1 + (recs['page'] - 1) * n,
              "Title": r["title"], "Score": r["score"], "Movie ID": r["item_id"]}
-            for i, r in enumerate(recs["items"])
+            for i, r in enumerate(rec_items)
         ]
         st.dataframe(rec_data, use_container_width=True, hide_index=True)
 
@@ -155,3 +195,17 @@ elif page == "🎥 Item Page":
             for i, s in enumerate(sims["items"])
         ]
         st.dataframe(sim_data, use_container_width=True, hide_index=True)
+
+
+# ── MODEL STATS PAGE ────────────────────────────────────────────────────────────
+
+elif page == "📊 Model Stats":
+    st.header("Model Comparison — FM vs DeepFM")
+    import pandas as pd
+
+    try:
+        comparison = pd.read_csv("../models/comparison.csv")
+        st.dataframe(comparison, use_container_width=True, hide_index=True)
+        st.caption("Winner: DeepFM (Best Test RMSE: 1.0063)")
+    except FileNotFoundError:
+        st.warning("Could not find `../models/comparison.csv` — check the file path relative to where you run `streamlit run`.")
