@@ -16,15 +16,6 @@ dataset/model is currently trained. Instead:
   subset/split). If there's a mismatch, the fixture fails loudly instead of
   silently testing the wrong thing.
 
-  NOTE: we deliberately check mapping membership in-process rather than by
-  calling /recommend/user/{id} or /similar/item/{id} over HTTP. There is a
-  known bug where /recommend/user/{id} throws an unhandled RuntimeError for
-  every id (see test_recommend_user.py for details and the xfail markers
-  documenting it). If these fixtures called that endpoint to validate an id,
-  every other test that depends on them (history, item profile, lists)
-  would fail during fixture setup too — even though those endpoints don't
-  touch the FM model at all. Fixture setup for unrelated endpoints shouldn't
-  be coupled to one broken endpoint's health.
 - unknown_user_id / unknown_item_id are ids guaranteed not to exist in either
   source, for the "not in training set" edge cases.
 """
@@ -63,7 +54,7 @@ def valid_user_id(client):
 def unknown_user_id(client):
     resp = client.get("/users")
     user_ids = resp.json()["user_ids"]
-    return max(user_ids) + 10_000_000  # guaranteed absent from both ratings and model
+    return max(user_ids) + 10_000_000
 
 
 @pytest.fixture(scope="session")
@@ -73,10 +64,10 @@ def valid_item_id(client):
     items = resp.json()["items"]
     assert items, "No items returned by /items — check movies data is loaded"
 
-    mapping = similarity.item_similarity.item_mapping
+    mapping = similarity.item_similarity._backend.item_mapping
     for entry in items:
         iid = entry["item_id"]
-        if str(iid) in mapping:
+        if str(iid) in mapping or iid in mapping:
             return iid
 
     pytest.fail(

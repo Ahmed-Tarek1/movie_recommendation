@@ -13,7 +13,7 @@ This module is split into two groups:
   hit_rate_at_k     1 if ≥1 relevant item appears in the top-K list, else 0
   precision_at_k    fraction of top-K recommendations that are relevant
   recall_at_k       fraction of relevant items retrieved in top-K
-  ndcg_at_k         Normalised Discounted Cumulative Gain (graded relevance)
+  ndcg_at_k         Normalised Discounted Cumulative Gain (graded or binary relevance)
   mrr               Mean Reciprocal Rank
 
   Utilities
@@ -22,7 +22,8 @@ This module is split into two groups:
 
 All ranking metrics treat a predicted item as relevant if it appears in the
 user's *actual* collection (binary relevance), **except** ndcg_at_k which
-accepts a {item: relevance_score} dict for graded relevance.
+accepts either a {item: relevance_score} dict for graded relevance, or a
+set/list for binary relevance (each item treated as relevance 1.0).
 """
 from typing import Any, List, Set, Union, Dict
 import numpy as np
@@ -59,6 +60,26 @@ def rmse(y_true: Any, y_pred: Any) -> float:
     if true_arr.size == 0:
         return 0.0
     return float(np.sqrt(np.mean((true_arr - pred_arr) ** 2)))
+
+
+def mae(y_true: Any, y_pred: Any) -> float:
+    """
+    Calculate Mean Absolute Error (MAE).
+
+    Args:
+        y_true: Ground truth ratings.
+        y_pred: Predicted ratings.
+    """
+    true_arr = _to_numpy(y_true)
+    pred_arr = _to_numpy(y_pred)
+    if true_arr.size == 0:
+        return 0.0
+    return float(np.mean(np.abs(true_arr - pred_arr)))
+
+
+# =====================================================================
+# 2. Ranking-based (Top-N Recommendation) Metrics (Per-User)
+# =====================================================================
 
 def hit_rate_at_k(actual: Union[List[Any], Set[Any]], predicted: List[Any], k: int) -> int:
     """
@@ -105,25 +126,6 @@ def hit_rate_at_k(actual: Union[List[Any], Set[Any]], predicted: List[Any], k: i
     return 0
 
 
-def mae(y_true: Any, y_pred: Any) -> float:
-    """
-    Calculate Mean Absolute Error (MAE).
-
-    Args:
-        y_true: Ground truth ratings.
-        y_pred: Predicted ratings.
-    """
-    true_arr = _to_numpy(y_true)
-    pred_arr = _to_numpy(y_pred)
-    if true_arr.size == 0:
-        return 0.0
-    return float(np.mean(np.abs(true_arr - pred_arr)))
-
-
-# =====================================================================
-# 2. Ranking-based (Top-N Recommendation) Metrics (Per-User)
-# =====================================================================
-
 def precision_at_k(actual: Union[List[Any], Set[Any]], predicted: List[Any], k: int) -> float:
     """
     Calculate Precision at K for a single user.
@@ -160,41 +162,47 @@ def recall_at_k(actual: Union[List[Any], Set[Any]], predicted: List[Any], k: int
     return len(intersection) / len(actual)
 
 
-def ndcg_at_k(actual: Dict[Any, float], predicted: List[Any], k: int) -> float:
+def ndcg_at_k(
+    actual: Union[Dict[Any, float], List[Any], Set[Any]],
+    predicted: List[Any],
+    k: int,
+) -> float:
     """
-    Calculate Normalized Discounted Cumulative Gain (NDCG) at K for a single user,
-    assuming dense (graded) relevance — e.g. ratings.
+    Calculate Normalized Discounted Cumulative Gain (NDCG) at K for a single user.
+
+    Accepts two relevance formats:
+      - Dict[item, float]: graded relevance (e.g. {movie_id: rating}).
+      - list or set:       binary relevance — each item treated as relevance 1.0.
 
     Args:
-        actual: Mapping of item -> relevance (e.g. {movie_id: rating}) for items
-                this user has ground-truth relevance for.
+        actual:    Ground-truth relevance. Dict for graded, set/list for binary.
         predicted: Ordered list of recommended item ids (model's ranking).
-        k: The number of top recommendations to consider.
+        k:         The number of top recommendations to consider.
     """
     if not actual or not predicted or k <= 0:
         return 0.0
 
-    predicted_k = predicted[:k]
+    # normalise to a relevance dict
+    if isinstance(actual, dict):
+        relevance = actual
+    else:
+        relevance = {item: 1.0 for item in actual}
 
-    # Discount factors per rank position
+    predicted_k = predicted[:k]
     discounts = [1 / np.log2(idx + 1) for idx, _ in enumerate(predicted_k, 1)]
 
-    # DCG: look up each predicted item's true relevance (0 if user has no rating for it)
-    dcg = 0.0
-    for item, disc in zip(predicted_k, discounts):
-        rel = actual.get(item, 0.0)
-        dcg += (2**rel - 1) * disc
+    dcg = sum(
+        (2 ** relevance.get(item, 0.0) - 1) * disc
+        for item, disc in zip(predicted_k, discounts)
+    )
 
-    # IDCG: best possible ordering — sort the user's known relevances, take top-k
-    ideal_relevances = sorted(actual.values(), reverse=True)[:k]
+    ideal_relevances = sorted(relevance.values(), reverse=True)[:k]
+    idcg = sum(
+        (2 ** rel - 1) * disc
+        for rel, disc in zip(ideal_relevances, discounts)
+    )
 
-    idcg = 0.0
-    for rel, disc in zip(ideal_relevances, discounts):
-        idcg += (2**rel - 1) * disc
-
-    if idcg == 0.0:
-        return 0.0
-    return dcg / idcg
+    return 0.0 if idcg == 0.0 else dcg / idcg
 
 
 def mrr(actual: List[Any], predicted: List[Any], k: int = None) -> float:
@@ -248,6 +256,7 @@ def mean_metric(
     scores = [metric_fn(act, pred, **kwargs) for act, pred in zip(actuals, predictions)]
     return float(np.mean(scores))
 
+
 # =====================================================================
 # 4. Catalog/System-Level Metrics (Coverage, Diversity, Novelty, Serendipity)
 # =====================================================================
@@ -271,6 +280,7 @@ def item_coverage(predictions: List[List[Any]], catalog: Union[List[Any], Set[An
 
     return len(recommended_items) / len(set(catalog))
 
+
 def diversity_at_k(predicted: List[Any], item_features: Dict[Any, np.ndarray], k: int) -> float:
     """
     Calculate intra-list diversity for a single user: average pairwise dissimilarity
@@ -288,19 +298,24 @@ def diversity_at_k(predicted: List[Any], item_features: Dict[Any, np.ndarray], k
 
     vectors = np.array([item_features[item] for item in predicted_k])
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-    norms[norms == 0] = 1e-10  # avoid division by zero
+    norms[norms == 0] = 1e-10
     normalized = vectors / norms
 
     sim_matrix = normalized @ normalized.T
     n = len(predicted_k)
-    # Sum upper triangle (excluding diagonal) of similarity matrix, average, then invert
     upper_tri_sum = np.sum(np.triu(sim_matrix, k=1))
     num_pairs = n * (n - 1) / 2
     avg_similarity = upper_tri_sum / num_pairs
 
     return 1.0 - float(avg_similarity)
 
-def novelty_at_k(predicted: List[Any], item_popularity: Dict[Any, int], total_interactions: int, k: int) -> float:
+
+def novelty_at_k(
+    predicted: List[Any],
+    item_popularity: Dict[Any, int],
+    total_interactions: int,
+    k: int,
+) -> float:
     """
     Calculate novelty for a single user: average self-information of the
     top-k recommended items, based on how rare they are in the training data.
@@ -309,44 +324,37 @@ def novelty_at_k(predicted: List[Any], item_popularity: Dict[Any, int], total_in
     Args:
         predicted: Ordered list of recommended items.
         item_popularity: Mapping of item -> number of interactions in training data.
-        total_interactions: Total number of interactions across the training data,
-                             used to normalize popularity into a probability.
+        total_interactions: Total number of interactions across the training data.
         k: The number of top recommendations to consider.
     """
     predicted_k = predicted[:k]
     if not predicted_k or total_interactions <= 0:
         return 0.0
 
-    self_information_scores = []
+    scores = []
     for item in predicted_k:
         pop = item_popularity.get(item, 0)
         if pop <= 0:
-            continue  # item unseen in training; undefined probability, skip rather than divide by zero
-        prob = pop / total_interactions
-        self_information_scores.append(-np.log2(prob))
+            continue
+        scores.append(-np.log2(pop / total_interactions))
 
-    if not self_information_scores:
-        return 0.0
+    return float(np.mean(scores)) if scores else 0.0
 
-    return float(np.mean(self_information_scores))
 
 def serendipity_at_k(
     actual: Union[List[Any], Set[Any]],
     predicted: List[Any],
     expected_items: Union[List[Any], Set[Any]],
-    k: int
+    k: int,
 ) -> float:
     """
     Calculate serendipity for a single user: fraction of top-k recommended items
-    that are both relevant (in actual) AND unexpected (not in expected_items,
-    e.g. not what a popularity or content-based baseline would have suggested).
+    that are both relevant (in actual) AND unexpected (not in expected_items).
 
     Args:
         actual: Collection of ground truth items the user interacted with/liked.
         predicted: Ordered list of recommended items.
-        expected_items: Items considered "obvious"/unsurprising for this user,
-                         e.g. top-N from a popularity baseline, or items similar
-                         to the user's historical interactions.
+        expected_items: Items considered obvious for this user (e.g. popularity baseline).
         k: The number of top recommendations to consider.
     """
     if not actual or not predicted or k <= 0:
