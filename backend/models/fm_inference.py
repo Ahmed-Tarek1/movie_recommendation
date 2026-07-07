@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+import pandas as pd
 import torch
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))  # repo root, for src/ import
@@ -12,7 +13,7 @@ from src.fm_model import DeepFM, FactorizationMachine  # noqa: E402
 
 
 class FMRecommender:
-    def __init__(self, model_path: str, config_path: str, device: str = "cpu"):
+    def __init__(self, model_path: str, config_path: str, movies_df: pd.DataFrame, device: str = "cpu"):
         with open(config_path) as f:
             self.config = json.load(f)
 
@@ -41,6 +42,45 @@ class FMRecommender:
         self.item_mapping: dict = self.config["item_mapping"]
         self.reverse_item_mapping = {v: k for k, v in self.item_mapping.items()}
 
+        # field_dims layout is [n_users, n_items, <one 2-way field per genre>].
+        # genre_cols gives the order those genre fields were trained in.
+        self.genre_cols: list[str] = self.config["genre_cols"]
+        self.genre_matrix = self._build_genre_matrix(movies_df)
+
+    def _build_genre_matrix(self, movies_df: pd.DataFrame) -> torch.Tensor:
+        """
+        Precompute a (n_items, n_genres) long tensor of 0/1 genre flags,
+        row-aligned with item_mapping's index order (row i = the item whose
+        item_mapping value is i). Built once at startup, not per-request.
+
+        Items with no genre info (or not found in movies_df) get an
+        all-zero genre row rather than raising — this mirrors the "no
+        genres listed" handling already used in the /profile/item endpoint.
+        """
+        n_items = len(self.item_mapping)
+        n_genres = len(self.genre_cols)
+        genre_to_col = {g: i for i, g in enumerate(self.genre_cols)}
+
+        matrix = torch.zeros((n_items, n_genres), dtype=torch.long)
+
+        movies_by_id = movies_df.set_index("movieId")
+
+        for raw_id_str, idx in self.item_mapping.items():
+            raw_id = int(raw_id_str)
+            if raw_id not in movies_by_id.index:
+                continue  # leave as all-zero genre row
+
+            genres_str = movies_by_id.loc[raw_id, "genres"]
+            if pd.isna(genres_str):
+                continue
+
+            for genre in genres_str.split("|"):
+                col = genre_to_col.get(genre)
+                if col is not None:
+                    matrix[idx, col] = 1
+
+        return matrix
+
     @torch.no_grad()
     def recommend_for_user(self, raw_user_id: int, top_n: int = 10) -> list[tuple[int, float]]:
         """Returns list of (raw_item_id, score) sorted descending by score."""
@@ -50,10 +90,10 @@ class FMRecommender:
         user_idx = self.user_mapping[str(raw_user_id)]
         n_items = len(self.item_mapping)
 
-        # build (n_items, 2) batch of [user_idx, item_idx] pairs
-        user_col = torch.full((n_items,), user_idx, dtype=torch.long)
-        item_col = torch.arange(n_items, dtype=torch.long)
-        batch = torch.stack([user_col, item_col], dim=1).to(self.device)
+        # build (n_items, 2 + n_genres) batch: [user_idx, item_idx, *genre_flags]
+        user_col = torch.full((n_items, 1), user_idx, dtype=torch.long)
+        item_col = torch.arange(n_items, dtype=torch.long).unsqueeze(1)
+        batch = torch.cat([user_col, item_col, self.genre_matrix], dim=1).to(self.device)
 
         scores = self.model(batch).cpu().numpy()
         ranked = sorted(
