@@ -17,6 +17,9 @@ pyyaml
 
 # Dashboard
 streamlit
+dash
+dash-bootstrap-components
+plotly
 requests
 
 # Notebooks / EDA

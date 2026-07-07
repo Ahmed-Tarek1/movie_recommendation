@@ -37,6 +37,13 @@ uvicorn backend.main:app --reload --port 8000
 
 **3. Start the dashboard:**
 
+**Option A: New Dash dashboard (recommended — rich UI with charts and filters):**
+```bash
+python dashboard/dash_app.py
+```
+Dashboard at `http://localhost:8050`
+
+**Option B: Original Streamlit dashboard (simple):**
 ```bash
 streamlit run dashboard/app.py
 ```
