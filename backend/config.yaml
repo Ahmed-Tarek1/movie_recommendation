@@ -17,6 +17,7 @@ similarity:
 data:
   ratings_path: "data/raw/ratings.csv"
   movies_path:  "data/raw/movies.csv"
+  tags_path:    "data/raw/tags.csv"
 
 api:
   title: "RS Course Project API"

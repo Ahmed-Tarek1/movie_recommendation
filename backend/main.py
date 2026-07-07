@@ -52,6 +52,8 @@ def load_models_and_data():
         item_embeddings_path=str(REPO_ROOT / config["model"]["item_embeddings_path"]),
         item_mapping=fm_inference.recommender.item_mapping,
         method=config["similarity"]["method"],
+        movies_path=str(REPO_ROOT / config["data"]["movies_path"]),
+        tags_path=str(REPO_ROOT / config["data"]["tags_path"]),
     )
 
     user_router.init_data(ratings_df, movies_df)
