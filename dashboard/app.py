@@ -218,3 +218,4 @@ elif page == "📊 Model Stats":
         
     except FileNotFoundError:
         st.warning("Could not find `../models/comparison.csv` — check the file path relative to where you run `streamlit run`.")
+        

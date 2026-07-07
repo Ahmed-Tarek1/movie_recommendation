@@ -9,12 +9,16 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 
+def _normalize_item_mapping(item_mapping: dict) -> dict[int, int]:
+    return {int(raw_id): int(idx) for raw_id, idx in item_mapping.items()}
+
+
 class EmbeddingSimilarity:
     """Cosine similarity on item embedding vectors from the trained DeepFM model."""
 
     def __init__(self, item_embeddings_path: str, item_mapping: dict):
-        self.item_mapping = item_mapping
-        self.reverse_item_mapping = {v: k for k, v in item_mapping.items()}
+        self.item_mapping = _normalize_item_mapping(item_mapping)
+        self.reverse_item_mapping = {v: k for k, v in self.item_mapping.items()}
         self.embeddings = np.load(item_embeddings_path)  # (n_items, embed_dim)
 
     def similar_to(self, raw_item_id: int, top_n: int = 10) -> list[tuple[int, float]]:
@@ -33,6 +37,7 @@ class ContentSimilarity:
     """TF-IDF cosine similarity on genres + tags text document per movie."""
 
     def __init__(self, movies_path: str, tags_path: str, item_mapping: dict):
+        item_mapping = _normalize_item_mapping(item_mapping)
         movies = pd.read_csv(movies_path)
         tags   = pd.read_csv(tags_path)
 
