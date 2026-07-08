@@ -62,20 +62,25 @@ tests/           pytest tests for backend endpoints
 ```
 
 ## API endpoints
-
+ 
 | Endpoint | Description |
 |---|---|
 | `GET /recommend/user/{user_id}?page=&page_size=` | Top-N recommendations for a user |
 | `GET /similar/item/{item_id}?page=&page_size=` | Top-N similar items |
+| `GET /history/user/{user_id}` | User's watch/rating history |
+| `GET /profile/item/{item_id}` | Item title + genres |
+| `GET /users` | List of all user IDs (used by dashboard) |
+| `GET /items` | List of all items (used by dashboard) |
 | `GET /health` | Health check |
-
+ 
 ## Notes
-
+ 
 - The FM model class lives in `src/fm_model.py` and is imported by both the
   training notebook and `backend/models/fm_inference.py` — don't redefine it
   in the notebook, or saved weights won't load cleanly.
 - `DeepFM` (same file) extends `FactorizationMachine` — it wraps an FM instance
   internally and adds an MLP tower on the same embeddings, so both models share
-  one inference loader. Set `model_type` in `fm_config.json` to switch between them.
-- `backend/config.yaml` is the single source of truth for model paths and
-  pagination defaults.
+  one inference loader. Set `model_type` in the model's config JSON to switch
+  between them.
+- `backend/config.yaml` is the single source of truth for model artifact paths
+  and pagination defaults.

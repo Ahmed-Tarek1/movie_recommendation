@@ -37,9 +37,10 @@ app.add_middleware(
 
 @app.on_event("startup")
 def load_models_and_data():
-    # --- data first: FMRecommender needs movies_df to build genre features ---
+    # --- data first: FMRecommender needs movies_df + tags_df to build feature matrix ---
     ratings_df = pd.read_csv(REPO_ROOT / config["data"]["ratings_path"])
     movies_df  = pd.read_csv(REPO_ROOT / config["data"]["movies_path"])
+    tags_df    = pd.read_csv(REPO_ROOT / config["data"]["tags_path"])
 
     # --- models ---
     fm_inference.recommender = FMRecommender(
@@ -47,6 +48,7 @@ def load_models_and_data():
         config_path=str(REPO_ROOT / config["model"]["fm_config_path"]),
         movies_df=movies_df,
         ratings_df=ratings_df,
+        tags_df=tags_df,
         device=config["model"]["device"],
     )
     similarity.item_similarity = ItemSimilarity(

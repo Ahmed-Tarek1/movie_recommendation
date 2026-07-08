@@ -1,5 +1,6 @@
 """
-Loads the trained FM model + mappings and serves top-N predictions for a user.
+Loads the trained FM/DeepFM model + mappings and serves top-N predictions per user.
+Features used: user_id, movie_id, 19 genre binary fields, 30 tag binary fields.
 """
 import json
 import sys
@@ -8,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import torch
 
-sys.path.append(str(Path(__file__).resolve().parents[2]))  # repo root, for src/ import
+sys.path.append(str(Path(__file__).resolve().parents[2]))
 from src.fm_model import DeepFM, FactorizationMachine  # noqa: E402
 
 
@@ -19,6 +20,7 @@ class FMRecommender:
         config_path: str,
         movies_df: pd.DataFrame,
         ratings_df: pd.DataFrame,
+        tags_df: pd.DataFrame,
         device: str = "cpu",
     ):
         with open(config_path) as f:
@@ -44,47 +46,62 @@ class FMRecommender:
         self.model.to(device)
         self.model.eval()
 
-        self.user_mapping: dict = self.config["user_mapping"]
-        self.item_mapping: dict = self.config["item_mapping"]
-        self.reverse_item_mapping = {v: k for k, v in self.item_mapping.items()}
+        self.user_mapping: dict           = self.config["user_mapping"]
+        self.item_mapping: dict           = self.config["item_mapping"]
+        self.reverse_item_mapping         = {v: k for k, v in self.item_mapping.items()}
+        self.feature_cols: list[str]      = self.config["feature_cols"]   # genres + tags in order
 
-        self.genre_cols: list[str] = self.config["genre_cols"]
-        self.genre_matrix = self._build_genre_matrix(movies_df)
+        self.feature_matrix = self._build_feature_matrix(movies_df, tags_df)
+        self.user_seen_items = self._build_seen_items(ratings_df)
 
-        # precompute per-user seen item sets for filtering at inference time
-        self.user_seen_items: dict[int, set[int]] = self._build_seen_items(ratings_df)
-
-    def _build_genre_matrix(self, movies_df: pd.DataFrame) -> torch.Tensor:
+    def _build_feature_matrix(
+        self, movies_df: pd.DataFrame, tags_df: pd.DataFrame
+    ) -> torch.Tensor:
         """
-        Precompute a (n_items, n_genres) long tensor of 0/1 genre flags,
-        row-aligned with item_mapping order. Built once at startup.
-        Items not in movies_df get all-zero genre row.
+        Precompute (n_items, n_features) long tensor of 0/1 flags for all
+        genre and tag fields, row-aligned with item_mapping. Built once at startup.
         """
-        n_items  = len(self.item_mapping)
-        n_genres = len(self.genre_cols)
-        genre_to_col = {g: i for i, g in enumerate(self.genre_cols)}
-        matrix = torch.zeros((n_items, n_genres), dtype=torch.long)
+        # reconstruct per-movie tag sets from tags_df
+        movie_tag_sets: dict[int, set[str]] = (
+            tags_df.groupby("movieId")["tag"]
+            .apply(lambda x: set(t.lower() for t in x))
+            .to_dict()
+        )
+
+        n_items   = len(self.item_mapping)
+        n_features = len(self.feature_cols)
+        matrix    = torch.zeros((n_items, n_features), dtype=torch.long)
+
         movies_by_id = movies_df.set_index("movieId")
+        col_index    = {col: i for i, col in enumerate(self.feature_cols)}
 
         for raw_id_str, idx in self.item_mapping.items():
             raw_id = int(raw_id_str)
             if raw_id not in movies_by_id.index:
                 continue
-            genres_str = movies_by_id.loc[raw_id, "genres"]
-            if pd.isna(genres_str):
-                continue
-            for genre in genres_str.split("|"):
-                col = genre_to_col.get(genre)
-                if col is not None:
-                    matrix[idx, col] = 1
+
+            row = movies_by_id.loc[raw_id]
+
+            # genre flags
+            genres_str = row.get("genres", "")
+            if pd.notna(genres_str):
+                for genre in genres_str.split("|"):
+                    col_name = genre  # genre cols are stored as plain genre names
+                    if col_name in col_index:
+                        matrix[idx, col_index[col_name]] = 1
+
+            # tag flags  (stored as "tag_<tagname>" in feature_cols)
+            movie_tags = movie_tag_sets.get(raw_id, set())
+            for col_name, col_i in col_index.items():
+                if col_name.startswith("tag_"):
+                    tag_value = col_name[4:]   # strip "tag_" prefix
+                    if tag_value in movie_tags:
+                        matrix[idx, col_i] = 1
 
         return matrix
 
     def _build_seen_items(self, ratings_df: pd.DataFrame) -> dict[int, set[int]]:
-        """
-        Precompute {user_id -> set of movie_ids they have already rated}.
-        Built once at startup so filtering per-request is a fast set lookup.
-        """
+        """Precompute {user_id -> set of rated movie_ids} for seen-item filtering."""
         seen: dict[int, set[int]] = {}
         for user_id, movie_id in zip(ratings_df["userId"], ratings_df["movieId"]):
             seen.setdefault(int(user_id), set()).add(int(movie_id))
@@ -98,10 +115,8 @@ class FMRecommender:
         filter_seen: bool = True,
     ) -> list[tuple[int, float]]:
         """
-        Returns list of (raw_item_id, score) sorted descending by score.
-
-        filter_seen=True (default): excludes movies the user has already rated,
-        so recommendations are genuinely new items for that user.
+        Returns list of (raw_item_id, score) sorted descending.
+        filter_seen=True excludes movies the user has already rated.
         """
         if str(raw_user_id) not in self.user_mapping:
             raise ValueError(f"Unknown user_id: {raw_user_id}")
@@ -109,19 +124,17 @@ class FMRecommender:
         user_idx = self.user_mapping[str(raw_user_id)]
         n_items  = len(self.item_mapping)
 
-        # build (n_items, 2 + n_genres) batch: [user_idx, item_idx, *genre_flags]
         user_col = torch.full((n_items, 1), user_idx, dtype=torch.long)
         item_col = torch.arange(n_items, dtype=torch.long).unsqueeze(1)
-        batch    = torch.cat([user_col, item_col, self.genre_matrix], dim=1).to(self.device)
+        batch    = torch.cat([user_col, item_col, self.feature_matrix], dim=1).to(self.device)
 
         scores = self.model(batch).cpu().numpy()
-
-        seen = self.user_seen_items.get(raw_user_id, set()) if filter_seen else set()
+        seen   = self.user_seen_items.get(raw_user_id, set()) if filter_seen else set()
 
         ranked = sorted(
             (
-                (idx, float(score))
-                for idx, score in enumerate(scores)
+                (idx, float(scores[idx]))
+                for idx in range(n_items)
                 if int(self.reverse_item_mapping[idx]) not in seen
             ),
             key=lambda x: x[1],
@@ -131,7 +144,6 @@ class FMRecommender:
         return [(int(self.reverse_item_mapping[idx]), float(score)) for idx, score in ranked]
 
 
-# Module-level singleton, populated by main.py on startup
 recommender: FMRecommender | None = None
 
 
